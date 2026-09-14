@@ -2,7 +2,7 @@
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, time, timedelta
 
 # Short names, in the order they appear in the schedule.
 LIBRARIES = {"hunt": "Hunt Library", "hill": "Hill Library"}
@@ -28,6 +28,9 @@ class Reservation:
     day: date
     start: int  # minutes after midnight
     end: int  # minutes after midnight; past 1440 if it ends at/after midnight
+
+    def ends_at(self):
+        return datetime.combine(self.day, time()) + timedelta(minutes=self.end)
 
 
 def to_minutes(hour, minute, am_pm):
@@ -102,13 +105,16 @@ def format_time(minutes):
     return f"{hour}:{minute:02d}{suffix}" if minute else f"{hour}{suffix}"
 
 
-def format_schedule(reservations):
-    days = sorted({r.day for r in reservations})
+def format_schedule(reservations, now):
+    """Build the GroupMe message, leaving out bookings that ended before `now`.
+
+    `now` is a plain datetime in North Carolina time (no timezone attached).
+    Returns "" if there's nothing left to show.
+    """
+    reservations = [r for r in reservations if r.ends_at() > now]
     sections = []
-    for day in days:
-        lines = []
-        if len(days) > 1:
-            lines.append(f"{day:%A, %b} {day.day}")
+    for day in sorted({r.day for r in reservations}):
+        lines = [f"{day:%A, %b} {day.day}"]
         for library in LIBRARY_ORDER:
             bookings = sorted((r for r in reservations if r.day == day and r.library == library), key=lambda r: r.start)
             if not bookings:
@@ -120,12 +126,12 @@ def format_schedule(reservations):
     return "\n\n".join(sections)
 
 
-def build_schedule(screenshot_texts):
-    """Combine every screenshot's text into one schedule. Returns (message, problems)."""
+def parse_screenshots(screenshot_texts):
+    """Combine every screenshot's text into one merged list. Returns (reservations, problems)."""
     all_reservations = []
     all_problems = []
     for text in screenshot_texts:
         reservations, problems = parse_reservations(text)
         all_reservations.extend(reservations)
         all_problems.extend(problems)
-    return format_schedule(merge_reservations(all_reservations)), all_problems
+    return merge_reservations(all_reservations), all_problems
