@@ -2,6 +2,7 @@ import json
 import logging
 import os
 
+import pytesseract
 import uvicorn
 from fastapi import FastAPI, Request
 
@@ -13,7 +14,11 @@ app = FastAPI()
 
 @app.get("/")
 def health():
-    return {"status": "ok"}
+    try:
+        tesseract = str(pytesseract.get_tesseract_version())
+    except pytesseract.TesseractNotFoundError:
+        tesseract = "not installed"
+    return {"status": "ok", "tesseract": tesseract}
 
 
 @app.post("/groupme")
