@@ -3,6 +3,7 @@ import io
 import json
 import logging
 import os
+import re
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -19,12 +20,16 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("lib-bot")
 
 BOT_ID = os.environ.get("GROUPME_BOT_ID", "")
-ALLOWED_SENDERS = {s.strip() for s in os.environ.get("ALLOWED_SENDER_IDS", "").split(",") if s.strip()}
+# Scholarship chair and Andrew. Override with the ALLOWED_SENDER_IDS variable in Railway.
+DEFAULT_ALLOWED_SENDERS = "114035989,106005336"
+ALLOWED_SENDERS = set(re.findall(r"\d+", os.environ.get("ALLOWED_SENDER_IDS") or DEFAULT_ALLOWED_SENDERS))
 WAIT_SECONDS = int(os.environ.get("WAIT_SECONDS", "60"))
 # On Railway this is the volume (/data). On a Mac it falls back to the ignored debug/ folder.
 SAVED_FILE = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "debug")) / "reservations.json"
 NC_TIME = ZoneInfo("America/New_York")
 GROUPME_MAX_LENGTH = 1000
+
+log.info("Allowed sender IDs: %s", ", ".join(sorted(ALLOWED_SENDERS)))
 
 app = FastAPI()
 
@@ -170,7 +175,7 @@ async def groupme_webhook(request: Request):
         log.info("Ignoring %s message from %s", message.get("sender_type"), message.get("name"))
         return {"ok": True}
 
-    if message.get("sender_id") not in ALLOWED_SENDERS:
+    if str(message.get("sender_id")) not in ALLOWED_SENDERS:
         log.info("Ignoring message from %s (sender_id %s)", message.get("name"), message.get("sender_id"))
         return {"ok": True}
 
