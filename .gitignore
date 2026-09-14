@@ -1,0 +1,21 @@
+# Virtual environment
+.venv/
+venv/
+
+# Secrets (GroupMe bot ID, tokens, etc.)
+.env
+.env.*
+
+# Python cache files
+__pycache__/
+*.pyc
+
+# Mac junk
+.DS_Store
+
+# Editor settings
+.vscode/
+.idea/
+
+# Screenshots and OCR output we save while testing
+debug/
