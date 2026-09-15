@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 # Short names, in the order they appear in the schedule.
 LIBRARIES = {"hunt": "Hunt Library", "hill": "Hill Library"}
 LIBRARY_ORDER = list(LIBRARIES.values())
+LIBRARY_EMOJI = {"Hunt Library": "📚", "Hill Library": "🐺"}
 
 # Each pattern searches anywhere in a line, because OCR sometimes glues
 # extra text on (e.g. the "12" from the calendar box: "12 James B. Hunt Jr. Library").
@@ -119,7 +120,7 @@ def format_schedule(reservations, now):
             bookings = sorted((r for r in reservations if r.day == day and r.library == library), key=lambda r: r.start)
             if not bookings:
                 continue
-            lines.append(f"{library}:")
+            lines.append(f"{LIBRARY_EMOJI[library]} {library}:")
             for r in bookings:
                 lines.append(f" - {format_time(r.start)}-{format_time(r.end)}: Room {r.room}")
         sections.append("\n".join(lines))

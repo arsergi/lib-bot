@@ -4,6 +4,7 @@ import json
 import logging
 import os
 import re
+import time
 from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -20,10 +21,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("lib-bot")
 
 BOT_ID = os.environ.get("GROUPME_BOT_ID", "")
-# Scholarship chair and Andrew. Override with the ALLOWED_SENDER_IDS variable in Railway.
+ADMIN_SENDER_ID = "106005336"  # Andrew: the only one who can use !debug
+# Marco (scholarship chair) and Andrew: the only ones whose screenshots get read.
+# Override with the ALLOWED_SENDER_IDS variable in Railway.
 DEFAULT_ALLOWED_SENDERS = "114035989,106005336"
 ALLOWED_SENDERS = set(re.findall(r"\d+", os.environ.get("ALLOWED_SENDER_IDS") or DEFAULT_ALLOWED_SENDERS))
 WAIT_SECONDS = int(os.environ.get("WAIT_SECONDS", "60"))
+ROOMS_COOLDOWN_SECONDS = 60 * 60
+COOLDOWN_REPLY = "Stop fucking around dude get a job"
 # On Railway this is the volume (/data). On a Mac it falls back to the ignored debug/ folder.
 SAVED_FILE = Path(os.environ.get("RAILWAY_VOLUME_MOUNT_PATH", "debug")) / "reservations.json"
 NC_TIME = ZoneInfo("America/New_York")
@@ -37,10 +42,32 @@ pending_image_urls = []
 timer_task = None
 background_tasks = set()  # keeps running tasks from being garbage collected
 processing_lock = asyncio.Lock()
+debug_mode = False  # when on, ended bookings are kept and shown
+last_rooms_request = {}  # sender_id -> when they last used !rooms (only for people not on the allowed list)
+muted_until = {}  # sender_id -> when the bot starts listening to them again
 
 
 def now_in_nc():
     return datetime.now(NC_TIME).replace(tzinfo=None)
+
+
+def cutoff_time():
+    """Bookings that end at or before this are hidden. In debug mode nothing is hidden."""
+    return datetime.min if debug_mode else now_in_nc()
+
+
+def check_rooms_limit(sender_id):
+    """For people not on the allowed list. Returns "ok", "warn" (second try within the hour), or "muted"."""
+    now = time.monotonic()
+    if muted_until.get(sender_id, 0) > now:
+        return "muted"
+    last = last_rooms_request.get(sender_id)
+    if last is not None and now - last < ROOMS_COOLDOWN_SECONDS:
+        muted_until[sender_id] = now + ROOMS_COOLDOWN_SECONDS
+        del last_rooms_request[sender_id]
+        return "warn"
+    last_rooms_request[sender_id] = now
+    return "ok"
 
 
 def load_saved():
@@ -111,7 +138,7 @@ async def process_and_post(always_post):
     async with processing_lock:
         urls = pending_image_urls.copy()
         pending_image_urls.clear()
-        now = now_in_nc()
+        now = cutoff_time()
         reservations = [r for r in load_saved() if r.ends_at() > now]
         found = 0
 
@@ -164,7 +191,7 @@ def health():
 
 @app.post("/groupme")
 async def groupme_webhook(request: Request):
-    global timer_task
+    global timer_task, debug_mode
     try:
         message = json.loads(await request.body())
     except json.JSONDecodeError:
@@ -175,15 +202,36 @@ async def groupme_webhook(request: Request):
         log.info("Ignoring %s message from %s", message.get("sender_type"), message.get("name"))
         return {"ok": True}
 
-    if str(message.get("sender_id")) not in ALLOWED_SENDERS:
-        log.info("Ignoring message from %s (sender_id %s)", message.get("name"), message.get("sender_id"))
+    sender_id = str(message.get("sender_id"))
+    name = message.get("name")
+    command = " ".join((message.get("text") or "").lower().split())  # "  !Debug   ON " -> "!debug on"
+
+    if command in ("!debug on", "!debug off"):
+        if sender_id != ADMIN_SENDER_ID:
+            log.info("Ignoring %s from %s (sender_id %s)", command, name, sender_id)
+            return {"ok": True}
+        debug_mode = command == "!debug on"
+        log.info("Debug mode turned %s by %s", "on" if debug_mode else "off", name)
+        run_in_background(post_to_groupme("Debug mode on." if debug_mode else "Debug mode off."))
+        return {"ok": True}
+
+    is_rooms_command = command == "!rooms"
+
+    if sender_id not in ALLOWED_SENDERS:
+        if not is_rooms_command:
+            log.info("Ignoring message from %s (sender_id %s)", name, sender_id)
+            return {"ok": True}
+        limit = check_rooms_limit(sender_id)
+        log.info("!rooms from %s (sender_id %s): %s", name, sender_id, limit)
+        if limit == "warn":
+            run_in_background(post_to_groupme(COOLDOWN_REPLY))
+        if limit == "ok":
+            cancel_timer()
+            run_in_background(process_and_post(always_post=True))
         return {"ok": True}
 
     image_urls = [a["url"] for a in message.get("attachments", []) if a.get("type") == "image" and a.get("url")]
-    is_rooms_command = (message.get("text") or "").strip().lower() == "!rooms"
-    log.info(
-        "Message from %s: %d image(s)%s", message.get("name"), len(image_urls), ", !rooms" if is_rooms_command else ""
-    )
+    log.info("Message from %s: %d image(s)%s", name, len(image_urls), ", !rooms" if is_rooms_command else "")
 
     if image_urls:
         pending_image_urls.extend(image_urls)
